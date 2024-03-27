@@ -86,4 +86,4 @@ def read_tiff_stack_with_dask(path: Path) -> da.Array:
         da.from_delayed(delayed_reader, shape=shape, dtype=dtype)
         for delayed_reader in lazy_arrays
     ]
-    return da.stack(dask_arrays, axis=0)
+    return da.stack(dask_arrays, axis=-1)

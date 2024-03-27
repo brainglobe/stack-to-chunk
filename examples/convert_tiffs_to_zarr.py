@@ -49,7 +49,6 @@ if __name__ == "__main__":
 
     # Read the tiff stack into a dask array
     da_arr = read_tiff_stack_with_dask(channel_dir)
-    da_arr = da_arr.transpose((2, 1, 0))
 
     # Add the dask array to the zarr group
     group.add_full_res_data(
