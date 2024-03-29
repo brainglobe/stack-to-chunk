@@ -7,6 +7,8 @@ array, and then saves it as a chunked zarr file.
 
 import shutil
 
+from loguru import logger
+
 from stack_to_chunk import MultiScaleGroup
 from stack_to_chunk.io_helpers import load_env_var_as_path, read_tiff_stack_with_dask
 
@@ -31,12 +33,11 @@ chunk_size = 64
 
 
 if __name__ == "__main__":
-
     tiff_files = sorted(channel_dir.glob("*.tif"))
     # Create a folders for the subject and channel in the output directory
     zarr_file_path = output_dir / subject_id / f"{subject_id}_{channel}.zarr"
     if zarr_file_path.exists():
-        print(f"Deleting existing {zarr_file_path}")
+        logger.info(f"Deleting existing {zarr_file_path}")
         shutil.rmtree(zarr_file_path)
 
     # Create a MultiScaleGroup object (zarr group)
@@ -44,11 +45,15 @@ if __name__ == "__main__":
         zarr_file_path,
         name=f"{subject_id}_{channel}",
         spatial_unit="micrometer",
-        voxel_sizes=(3, 3, 3),
+        voxel_size=(3, 3, 3),
     )
 
     # Read the tiff stack into a dask array
     da_arr = read_tiff_stack_with_dask(channel_dir)
+    logger.info(
+        f"Read tiff stack into Dask array with shape {da_arr.shape}, "
+        f"dtype {da_arr.dtype}, and chunk sizes {da_arr.chunksize}"
+    )
 
     # Add the dask array to the zarr group
     group.add_full_res_data(
