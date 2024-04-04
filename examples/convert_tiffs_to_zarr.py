@@ -7,15 +7,16 @@ array, and then saves it as a chunked zarr file.
 
 import shutil
 
+import dask_image.imread
 from loguru import logger
 
 from stack_to_chunk import MultiScaleGroup
-from stack_to_chunk.io_helpers import load_env_var_as_path, read_tiff_stack_with_dask
+from stack_to_chunk._io_helpers import _load_env_var_as_path
 
 # Paths to the Google Drive folder containing tiffs for all subjects & channels
 # and the output folder for the zarr files (both set as environment variables)
-input_dir = load_env_var_as_path("ATLAS_PROJECT_TIFF_INPUT_DIR")
-output_dir = load_env_var_as_path("ATLAS_PROJECT_ZARR_OUTPUT_DIR")
+input_dir = _load_env_var_as_path("ATLAS_PROJECT_TIFF_INPUT_DIR")
+output_dir = _load_env_var_as_path("ATLAS_PROJECT_ZARR_OUTPUT_DIR")
 
 # Define subject ID and check that the corresponding folder exists
 subject_id = "topro35"
@@ -33,7 +34,6 @@ chunk_size = 64
 
 
 if __name__ == "__main__":
-    tiff_files = sorted(channel_dir.glob("*.tif"))
     # Create a folders for the subject and channel in the output directory
     zarr_file_path = output_dir / subject_id / f"{subject_id}_{channel}.zarr"
     if zarr_file_path.exists():
@@ -49,7 +49,10 @@ if __name__ == "__main__":
     )
 
     # Read the tiff stack into a dask array
-    da_arr = read_tiff_stack_with_dask(channel_dir)
+    # Passing only the first tiff is enough
+    # (because the rest of the stack is refererenced in metadata)
+    tiff_files = sorted(channel_dir.glob("*.tif"))
+    da_arr = dask_image.imread.imread(tiff_files[0]).T
     logger.info(
         f"Read tiff stack into Dask array with shape {da_arr.shape}, "
         f"dtype {da_arr.dtype}, and chunk sizes {da_arr.chunksize}"
