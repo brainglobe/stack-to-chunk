@@ -13,6 +13,8 @@ from loguru import logger
 from stack_to_chunk import MultiScaleGroup
 from stack_to_chunk._io_helpers import _load_env_var_as_path
 
+OVERWRITE_EXISTING_ZARR = True
+
 # Paths to the Google Drive folder containing tiffs for all subjects & channels
 # and the output folder for the zarr files (both set as environment variables)
 input_dir = _load_env_var_as_path("ATLAS_PROJECT_TIFF_INPUT_DIR")
@@ -36,12 +38,9 @@ chunk_size = 64
 if __name__ == "__main__":
     # Create a folders for the subject and channel in the output directory
     zarr_file_path = output_dir / subject_id / f"{subject_id}_{channel}.zarr"
-    if zarr_file_path.exists():
-        logger.info(f"Deleting existing {zarr_file_path}")
-        shutil.rmtree(zarr_file_path)
 
     # Create a MultiScaleGroup object (zarr group)
-    group = MultiScaleGroup(
+    zarr_group = MultiScaleGroup(
         zarr_file_path,
         name=f"{subject_id}_{channel}",
         spatial_unit="micrometer",
@@ -58,10 +57,21 @@ if __name__ == "__main__":
         f"dtype {da_arr.dtype}, and chunk sizes {da_arr.chunksize}"
     )
 
-    # Add the dask array to the zarr group
-    group.add_full_res_data(
-        da_arr,
-        n_processes=5,
-        chunk_size=chunk_size,
-        compressor="default",
-    )
+    # Delete existing zarr file if it exists and we want to overwrite it
+    if OVERWRITE_EXISTING_ZARR and zarr_file_path.exists():
+        logger.info(f"Deleting existing {zarr_file_path}")
+        shutil.rmtree(zarr_file_path)
+
+    # Add full resolution data to zarr group 0
+    if OVERWRITE_EXISTING_ZARR or not zarr_file_path.exists():
+        zarr_group.add_full_res_data(
+            da_arr,
+            n_processes=5,
+            chunk_size=chunk_size,
+            compressor="default",
+        )
+
+        # Add downsampled levels
+        # Each level corresponds to downsampling by a factor of 2**i
+        for i in range(1, 3):
+            zarr_group.add_downsample_level(i)
