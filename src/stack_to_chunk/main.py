@@ -13,6 +13,7 @@ from dask.diagnostics import ProgressBar
 from loguru import logger
 from numcodecs import blosc
 from numcodecs.abc import Codec
+from scipy.ndimage import zoom
 
 from stack_to_chunk._array_helpers import _copy_slab
 from stack_to_chunk.ome_ngff import SPATIAL_UNIT
@@ -189,18 +190,54 @@ class MultiScaleGroup:
             msg = f"Level {level_str} already found in zarr group"
             raise RuntimeError(msg)
 
-        if (level_minus_one := str(int(level) - 1)) not in self._group:
+        level_minus_one = str(int(level) - 1)
+        if level_minus_one not in self._group:
             msg = f"Level below (level={level_minus_one}) not present in group."
             raise RuntimeError(
                 msg,
             )
 
+        logger.info(f"Downsampling level {level_minus_one} to level {level_str}...")
+        # Create the new level in the zarr group.
         source_data = self._group[level_minus_one]
         new_shape = np.array(source_data.shape) // 2
-
         self._group[level_str] = zarr.create(
             new_shape,
             chunks=source_data.chunks,
             dtype=source_data.dtype,
             compressor=source_data.compressor,
         )
+
+        # Lazily take each dask chunk as a block and downsample it.
+
+    @staticmethod
+    def downsample_slab(
+        slab: np.ndarray, factor: int = 2, order: int = 1
+    ) -> np.ndarray:
+        """
+        Downsample a single chunk of data using linear interpolation.
+
+        Parameters
+        ----------
+        chunk : numpy.ndarray
+            The chunk of data to downsample.
+        factor : int, optional
+            The downsampling factor, by default 2.
+        order : int, optional
+            The order of the spline interpolation, by default 1 (linear).
+
+        Returns
+        -------
+        numpy.ndarray
+            The downsampled chunk.
+
+        Notes
+        -----
+        This function uses ``scipy.ndimage.zoom`` to perform the downsampling.
+
+        """
+        new_shape = np.maximum(1, np.array(slab.shape) // factor)
+        if np.any(new_shape < 1):
+            logger.warning("Chunk too small to downsample. Returning original.")
+            return slab
+        return zoom(slab, zoom=1 / factor, order=order, mode="nearest")
