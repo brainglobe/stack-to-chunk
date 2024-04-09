@@ -13,9 +13,8 @@ from dask.diagnostics import ProgressBar
 from loguru import logger
 from numcodecs import blosc
 from numcodecs.abc import Codec
-from scipy.ndimage import zoom
 
-from stack_to_chunk._array_helpers import _copy_slab
+from stack_to_chunk._array_helpers import _copy_slab, _downsample_and_copy_block
 from stack_to_chunk.ome_ngff import SPATIAL_UNIT
 
 
@@ -200,44 +199,36 @@ class MultiScaleGroup:
         logger.info(f"Downsampling level {level_minus_one} to level {level_str}...")
         # Create the new level in the zarr group.
         source_data = self._group[level_minus_one]
-        new_shape = np.array(source_data.shape) // 2
+        target_shape = np.array(source_data.shape) // 2
         self._group[level_str] = zarr.create(
-            new_shape,
+            target_shape,
             chunks=source_data.chunks,
             dtype=source_data.dtype,
             compressor=source_data.compressor,
         )
 
-        # Lazily take each dask chunk as a block and downsample it.
+        # Take blocks of size 2x2x2 from the source data
+        source_block_shape = np.array(source_data.chunks) * 2
+        source_block_idxs = np.array(
+            [
+                (x, y, z)
+                for x in range(0, target_shape[0], source_block_shape[0])
+                for y in range(0, target_shape[1], source_block_shape[1])
+                for z in range(0, target_shape[2], source_block_shape[2])
+            ]
+        )
 
-    @staticmethod
-    def downsample_slab(
-        slab: np.ndarray, factor: int = 2, order: int = 1
-    ) -> np.ndarray:
-        """
-        Downsample a single chunk of data using linear interpolation.
-
-        Parameters
-        ----------
-        chunk : numpy.ndarray
-            The chunk of data to downsample.
-        factor : int, optional
-            The downsampling factor, by default 2.
-        order : int, optional
-            The order of the spline interpolation, by default 1 (linear).
-
-        Returns
-        -------
-        numpy.ndarray
-            The downsampled chunk.
-
-        Notes
-        -----
-        This function uses ``scipy.ndimage.zoom`` to perform the downsampling.
-
-        """
-        new_shape = np.maximum(1, np.array(slab.shape) // factor)
-        if np.any(new_shape < 1):
-            logger.warning("Chunk too small to downsample. Returning original.")
-            return slab
-        return zoom(slab, zoom=1 / factor, order=order, mode="nearest")
+        # Iterate over blocks and downsample them by a factor of 2
+        # Write the downsampled block to the target zarr group)
+        for block in source_block_idxs:
+            logger.debug(f"Downsampling block {block}...")
+            source_block = source_data[
+                block[0] : block[0] + source_block_shape[0],
+                block[1] : block[1] + source_block_shape[1],
+                block[2] : block[2] + source_block_shape[2],
+            ]
+            _downsample_and_copy_block(
+                self._group[level_str],
+                source_block,
+                block // 2,
+            )
