@@ -2,19 +2,23 @@
 Main code for converting stacks to chunks.
 """
 
+from math import ceil
 from pathlib import Path
 from typing import Any, Literal
 
+import dask.array as da
 import numpy as np
 import zarr
 from dask import delayed
 from dask.array.core import Array
 from dask.diagnostics import ProgressBar
+from dask_image.ndinterp import affine_transform
 from loguru import logger
 from numcodecs import blosc
 from numcodecs.abc import Codec
+from ome_zarr.dask_utils import downscale_nearest
 
-from stack_to_chunk._array_helpers import _copy_slab, _downsample_and_copy_block
+from stack_to_chunk._array_helpers import _copy_slab
 from stack_to_chunk.ome_ngff import SPATIAL_UNIT
 
 
@@ -32,6 +36,8 @@ class MultiScaleGroup:
         Size of a single voxel, in units of spatial_units.
     spatial_units :
         Units of the voxel size.
+    interpolation :
+            Interpolation method to use when downsampling data.
 
     """
 
@@ -42,14 +48,19 @@ class MultiScaleGroup:
         name: str,
         voxel_size: tuple[float, float, float],
         spatial_unit: SPATIAL_UNIT,
+        interpolation: Literal["linear", "nearest"] = "linear",
     ) -> None:
         if path.exists():
             msg = f"{path} already exists"
             raise FileExistsError(msg)
+        if interpolation not in ["linear", "nearest"]:
+            msg = "interpolation must be 'linear' or 'nearest'"
+            raise ValueError(msg)
         self._path = path
         self._name = name
         self._spatial_unit = spatial_unit
         self._voxel_size = voxel_size
+        self._interpolation = interpolation
 
         self._create_zarr_group()
 
@@ -68,13 +79,17 @@ class MultiScaleGroup:
             {"name": "y", "type": "space", "unit": self._spatial_unit},
             {"name": "x", "type": "space", "unit": self._spatial_unit},
         ]
-        multiscales["type"] = "linear"
+        multiscales["type"] = self._interpolation
         multiscales["metadata"] = {
-            "description": "Downscaled using linear resampling",
+            "description": f"Downscaled using {self._interpolation} resampling",
+            "method": "scipy.ndimage.affine_transform",
+            "args": "[0.5, 0.5, 0.5]",
+            "kwargs": {"order": 1, "mode": "nearest"},
         }
 
         multiscales["datasets"] = []
         self._group.attrs["multiscales"] = multiscales
+        self._add_multiscale_dataset_metadata(level=0)
 
     @property
     def levels(self) -> list[int]:
@@ -197,38 +212,71 @@ class MultiScaleGroup:
             )
 
         logger.info(f"Downsampling level {level_minus_one} to level {level_str}...")
-        # Create the new level in the zarr group.
-        source_data = self._group[level_minus_one]
-        target_shape = np.array(source_data.shape) // 2
-        self._group[level_str] = zarr.create(
-            target_shape,
-            chunks=source_data.chunks,
-            dtype=source_data.dtype,
-            compressor=source_data.compressor,
-        )
 
-        # Take blocks of size 2x2x2 from the source data
-        source_block_shape = np.array(source_data.chunks) * 2
-        source_block_idxs = np.array(
-            [
-                (x, y, z)
-                for x in range(0, target_shape[0], source_block_shape[0])
-                for y in range(0, target_shape[1], source_block_shape[1])
-                for z in range(0, target_shape[2], source_block_shape[2])
-            ]
-        )
+        # Get the source data from the level below as a dask array
+        source_group = self._group[level_minus_one]
+        source_data = da.from_zarr(source_group, source_group.chunks)
 
-        # Iterate over blocks and downsample them by a factor of 2
-        # Write the downsampled block to the target zarr group)
-        for block in source_block_idxs:
-            logger.debug(f"Downsampling block {block}...")
-            source_block = source_data[
-                block[0] : block[0] + source_block_shape[0],
-                block[1] : block[1] + source_block_shape[1],
-                block[2] : block[2] + source_block_shape[2],
-            ]
-            _downsample_and_copy_block(
-                self._group[level_str],
-                source_block,
-                block // 2,
+        # Make sure to always round-up the output shape
+        downsampled_shape = [ceil(s / 2) for s in source_data.shape]
+        # Downsample the data by a factor of 2
+        if self._interpolation == "linear":
+            # We use the dask_image.ndinterp.affine_transform function
+            # which is the Dask-ified version of scipy.ndimage.affine_transform
+            downsampled_data = affine_transform(
+                source_data,
+                matrix=np.eye(3) * 2,  # scale matrix
+                order=1,  # linear interpolation
+                mode="nearest",  # edge padding
+                output_shape=downsampled_shape,
+                output_chunks=source_group.chunks,
             )
+        elif self._interpolation == "nearest":
+            # In theory we could use the affine_transform function with order=0
+            # but the downscale_nearest function here is blazing fast!
+            downsampled_data = downscale_nearest(source_data, factors=(2, 2, 2))
+        logger.info(
+            f"Generated level {level_str} array with shape {downsampled_data.shape} "
+            f"and chunk sizes {downsampled_data.chunksize}, using "
+            f"{self._interpolation} interpolation."
+        )
+
+        # Write the downsampled data to the zarr group
+        downsampled_store = self._group.require_dataset(
+            level_str,
+            shape=downsampled_data.shape,
+            chunks=source_group.chunks,
+            dtype=source_group.dtype,
+            compressor=source_group.compressor,
+        )
+        downsampled_data.to_zarr(downsampled_store)
+
+        self._add_multiscale_dataset_metadata(level)
+        logger.info(f"Added level {level_str} to zarr group.")
+
+    def _add_multiscale_dataset_metadata(self, level: int = 0) -> None:
+        """
+        Add the multiscale dataset metadata for the corresponding level to the group.
+
+        Parameters
+        ----------
+        level :
+            Level of downsampling. Level 0 corresponds to full resolution data.
+
+        """
+        scale_factors = [float(s * 2**level) for s in self._voxel_size]
+        new_dataset = {
+            "path": str(level),
+            "coordinateTransformations": [
+                {
+                    "type": "scale",
+                    "scale": scale_factors,
+                }
+            ],
+        }
+
+        multiscales = self._group.attrs["multiscales"]
+        existing_dataset_paths = [d["path"] for d in multiscales["datasets"]]
+        if new_dataset["path"] not in existing_dataset_paths:
+            multiscales["datasets"].append(new_dataset)
+        self._group.attrs["multiscales"] = multiscales

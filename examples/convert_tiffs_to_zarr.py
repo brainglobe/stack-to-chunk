@@ -5,32 +5,49 @@ This script loads the multi-tiff stack from a Google Drive folder into a dask
 array, and then saves it as a chunked zarr file.
 """
 
+import os
 import shutil
+from pathlib import Path
 
 import dask_image.imread
 from loguru import logger
 
 from stack_to_chunk import MultiScaleGroup
-from stack_to_chunk._io_helpers import _load_env_var_as_path
 
 OVERWRITE_EXISTING_ZARR = True
 USE_SAMPLE_DATA = True
+
+
+def _load_env_var_as_path(env_var: str) -> Path:
+    """Load an environment variable as a Path object."""
+    path_str = os.getenv(env_var)
+
+    if path_str is None:
+        msg = f"Please set the environment variable {env_var}."
+        raise ValueError(msg)
+
+    path = Path(path_str)
+    if not path.is_dir():
+        msg = f"{path} is not a valid directory path."
+        raise ValueError(msg)
+    return path
 
 
 # Paths to the Google Drive folder containing tiffs for all subjects & channels
 # and the output folder for the zarr files (both set as environment variables)
 input_dir = _load_env_var_as_path("ATLAS_PROJECT_TIFF_INPUT_DIR")
 output_dir = _load_env_var_as_path("ATLAS_PROJECT_ZARR_OUTPUT_DIR")
-# Chunk size for the zarr file
-chunk_size = 16
+
 
 if USE_SAMPLE_DATA:
     from stack_to_chunk.sample_data import SampleDaskStack
 
-    cat_data = SampleDaskStack(output_dir / "sample_data", n_slices=128)
+    cat_data = SampleDaskStack(output_dir / "sample_data", n_slices=1053)
     cat_data.get_images()
+    chunk_size = 32
 
 else:
+    chunk_size = 128
     # Define subject ID and check that the corresponding folder exists
     subject_id = "topro35"
     assert (input_dir / subject_id).is_dir()
@@ -72,7 +89,8 @@ if __name__ == "__main__":
             zarr_file_path,
             name="stack",
             spatial_unit="micrometer",
-            voxel_size=(3, 3, 3),
+            voxel_size=(0.98, 0.98, 3),
+            interpolation="linear",
         )
         # Add full resolution data to zarr group 0
         zarr_group.add_full_res_data(
@@ -84,5 +102,5 @@ if __name__ == "__main__":
 
         # Add downsampled levels
         # Each level corresponds to downsampling by a factor of 2**i
-        for i in [1]:
+        for i in [1, 2]:
             zarr_group.add_downsample_level(i)
