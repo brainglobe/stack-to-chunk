@@ -7,16 +7,14 @@ from pathlib import Path
 from typing import Any, Literal
 
 import dask.array as da
-import numpy as np
 import zarr
 from dask import delayed
 from dask.array.core import Array
 from dask.diagnostics import ProgressBar
-from dask_image.ndinterp import affine_transform
 from loguru import logger
 from numcodecs import blosc
 from numcodecs.abc import Codec
-from ome_zarr.dask_utils import downscale_nearest
+from ome_zarr.dask_utils import resize
 
 from stack_to_chunk._array_helpers import _copy_slab
 from stack_to_chunk.ome_ngff import SPATIAL_UNIT
@@ -82,9 +80,6 @@ class MultiScaleGroup:
         multiscales["type"] = self._interpolation
         multiscales["metadata"] = {
             "description": f"Downscaled using {self._interpolation} resampling",
-            "method": "scipy.ndimage.affine_transform",
-            "args": "[0.5, 0.5, 0.5]",
-            "kwargs": {"order": 1, "mode": "nearest"},
         }
 
         multiscales["datasets"] = []
@@ -217,24 +212,16 @@ class MultiScaleGroup:
         source_group = self._group[level_minus_one]
         source_data = da.from_zarr(source_group, source_group.chunks)
 
-        # Make sure to always round-up the output shape
-        downsampled_shape = [ceil(s / 2) for s in source_data.shape]
         # Downsample the data by a factor of 2
-        if self._interpolation == "linear":
-            # We use the dask_image.ndinterp.affine_transform function
-            # which is the Dask-ified version of scipy.ndimage.affine_transform
-            downsampled_data = affine_transform(
-                source_data,
-                matrix=np.eye(3) * 2,  # scale matrix
-                order=1,  # linear interpolation
-                mode="nearest",  # edge padding
-                output_shape=downsampled_shape,
-                output_chunks=source_group.chunks,
-            )
-        elif self._interpolation == "nearest":
-            # In theory we could use the affine_transform function with order=0
-            # but the downscale_nearest function here is blazing fast!
-            downsampled_data = downscale_nearest(source_data, factors=(2, 2, 2))
+        downsampled_shape = tuple(ceil(dim / 2) for dim in source_data.shape)
+        spline_order = 1 if self._interpolation == "linear" else 0
+        downsampled_data = resize(  # dask-ified wrapper around skimage.transform.resize
+            source_data,
+            output_shape=downsampled_shape,
+            order=spline_order,
+            preserve_range=True,  # should this be always True?
+            anti_aliasing=True,  # should this be always True?
+        )
         logger.info(
             f"Generated level {level_str} array with shape {downsampled_data.shape} "
             f"and chunk sizes {downsampled_data.chunksize}, using "

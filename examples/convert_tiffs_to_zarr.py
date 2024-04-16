@@ -15,7 +15,7 @@ from loguru import logger
 from stack_to_chunk import MultiScaleGroup
 
 OVERWRITE_EXISTING_ZARR = True
-USE_SAMPLE_DATA = True
+USE_SAMPLE_DATA = False
 
 
 def _load_env_var_as_path(env_var: str) -> Path:
