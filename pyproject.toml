@@ -16,6 +16,8 @@ classifiers = [
 dependencies = [
     "dask",
     "loguru",
+    "numpy",
+    "scikit-image==0.22.0",
     "zarr",
 ]
 description = "Convert stacks of images to chunked datasets"
@@ -32,7 +34,6 @@ optional-dependencies = {dev = [
     "dask-image",
     "matplotlib",
     "pydata-sphinx-theme",
-    "scikit-image",
     "sphinx",
     "sphinx-autoapi",
     "sphinx-gallery",

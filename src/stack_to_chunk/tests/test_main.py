@@ -53,9 +53,14 @@ def test_workflow(tmp_path: Path, arr: da.Array) -> None:
                         {"name": "z", "type": "space", "unit": "centimeter"},
                     ],
                     "datasets": [],
-                    "metadata": {"description": "Downscaled using linear resampling"},
+                    "metadata": {
+                        "description": "Downscaled using local mean in 2x2x2 blocks.",
+                        "kwargs": {"block_size": 2, "func": "np.mean"},
+                        "method": "skimage.measure.block_reduce",
+                        "version": "0.22.0",
+                    },
                     "name": "my_zarr_group",
-                    "type": "linear",
+                    "type": "local mean",
                     "version": "0.4",
                 }
             ]
@@ -92,14 +97,19 @@ def test_workflow(tmp_path: Path, arr: da.Array) -> None:
                     "datasets": [
                         {
                             "coordinateTransformations": [
-                                {"scale": [3, 4, 5], "type": "scale"}
+                                {"scale": [3.0, 4.0, 5.0], "type": "scale"}
                             ],
                             "path": "0",
                         }
                     ],
-                    "metadata": {"description": "Downscaled using linear resampling"},
+                    "metadata": {
+                        "description": "Downscaled using local mean in 2x2x2 blocks.",
+                        "kwargs": {"block_size": 2, "func": "np.mean"},
+                        "method": "skimage.measure.block_reduce",
+                        "version": "0.22.0",
+                    },
                     "name": "my_zarr_group",
-                    "type": "linear",
+                    "type": "local mean",
                     "version": "0.4",
                 }
             ]
@@ -160,3 +170,39 @@ def test_wrong_chunksize(tmp_path: Path, arr: da.Array) -> None:
             chunk_size=64,
             compressor="default",
         )
+
+
+def test_known_data(tmp_path: Path) -> None:
+    # Test downsampling on some simple data that gives an exact known result
+    arr = da.from_array(np.arange(8).reshape((2, 2, 2)))
+    arr = arr.rechunk(chunks=(2, 2, 1))
+
+    group = MultiScaleGroup(
+        tmp_path / "group.ome.zarr",
+        name="my_zarr_group",
+        spatial_unit="centimeter",
+        voxel_size=(3, 4, 5),
+    )
+    group.add_full_res_data(arr, chunk_size=1, compressor="default", n_processes=1)
+    group.add_downsample_level(1, n_processes=1)
+    arr_downsammpled = group[1]
+    np.testing.assert_equal(arr_downsammpled[:], [[[3]]])
+
+
+def test_padding(tmp_path: Path) -> None:
+    # Test data that doesn't fit exactly into (2, 2, 2) shaped chunks
+    arr_npy = np.arange(8).reshape((2, 2, 2))
+    arr_npy = np.concatenate([arr_npy, [[[10, 10], [12, 16]]]], axis=0)
+    arr = da.from_array(arr_npy)
+    arr = arr.rechunk(chunks=(2, 2, 1))
+
+    group = MultiScaleGroup(
+        tmp_path / "group.ome.zarr",
+        name="my_zarr_group",
+        spatial_unit="centimeter",
+        voxel_size=(3, 4, 5),
+    )
+    group.add_full_res_data(arr, chunk_size=1, compressor="default", n_processes=1)
+    group.add_downsample_level(1, n_processes=1)
+    arr_downsammpled = group[1]
+    np.testing.assert_equal(arr_downsammpled[:], [[[3]], [[12]]])
