@@ -18,6 +18,7 @@ dependencies = [
     "loguru",
     "numpy",
     "scikit-image==0.22.0",
+    "tqdm",
     "zarr",
 ]
 description = "Convert stacks of images to chunked datasets"
