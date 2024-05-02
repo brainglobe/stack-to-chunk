@@ -26,6 +26,9 @@
 [licence-badge]:            https://img.shields.io/badge/License-BSD_3--Clause-blue.svg
 <!-- prettier-ignore-end -->
 
+> [!Warning]
+> This fork is solely here for the purpose of contributing back to the upstream `stack-to-chunk` repository. It's not a maintained fork and should not be used for any other purpose.
+
 ## Contributing
 
 This code is designed and specialised to work with data from the [HiP-CT project](https://mecheng.ucl.ac.uk/hip-ct/), but openly available in the hope it might be useful for other people or groups.
