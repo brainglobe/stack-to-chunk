@@ -27,7 +27,7 @@
 <!-- prettier-ignore-end -->
 
 > [!Warning]
-> This fork is solely here for the purpose of contributing back to the upstream `stack-to-chunk` repository. It's not a maintained fork and should not be used for any other purpose.
+> Don't delete this fork. It contains branches - `try-reading-gdrive` and `implement-downsampling` - which are being used for contributing back to the upstream `stack-to-chunk` repository. 
 
 ## Contributing
 
