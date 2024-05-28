@@ -9,9 +9,8 @@ import os
 import shutil
 from pathlib import Path
 
-import dask.array as da
+from brainglobe_utils.IO.image import read_with_dask
 from loguru import logger
-from pims import ImageSequence
 
 from stack_to_chunk import MultiScaleGroup
 
@@ -48,7 +47,7 @@ if USE_SAMPLE_DATA:
     chunk_size = 32
 
 else:
-    chunk_size = 128
+    chunk_size = 64
     # Define subject ID which is part of the folder name
     subject_id = "ToPro54"
     # Define channel (by wavelength) and check that there is exactly one folder
@@ -73,9 +72,7 @@ if __name__ == "__main__":
 
         # Read the tiff stack into a dask array
         # (passing first image is enough, because it contains metadata about the stack)
-        img_seq = ImageSequence(str(channel_dir / "*.ome.tif"))
-        img_0 = img_seq[0]
-        da_stack = da.from_array(img_0, chunks=(1, img_0.shape[1], img_0.shape[2])).T
+        da_stack = read_with_dask(channel_dir)
         logger.info(
             f"Read tiff stack into Dask array with shape {da_stack.shape}, "
             f"dtype {da_stack.dtype}, and chunk sizes {da_stack.chunksize}"
@@ -99,7 +96,7 @@ if __name__ == "__main__":
         logger.info("Adding full resolution data to zarr group 0...")
         zarr_group.add_full_res_data(
             da_stack,
-            n_processes=6,
+            n_processes=4,
             chunk_size=chunk_size,
             compressor="default",
         )
@@ -109,5 +106,5 @@ if __name__ == "__main__":
         # Each level corresponds to downsampling by a factor of 2**i
         for i in [1, 2]:
             logger.info(f"Adding downsample level {i}...")
-            zarr_group.add_downsample_level(i, n_processes=6)
+            zarr_group.add_downsample_level(i, n_processes=4)
             logger.info(f"Finished adding downsample level {i}.")
