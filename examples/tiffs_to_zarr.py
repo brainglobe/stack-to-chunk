@@ -9,13 +9,14 @@ import os
 import shutil
 from pathlib import Path
 
-import dask_image.imread
+import dask.array as da
 from loguru import logger
+from pims import ImageSequence
 
 from stack_to_chunk import MultiScaleGroup
 
 OVERWRITE_EXISTING_ZARR = True
-USE_SAMPLE_DATA = True
+USE_SAMPLE_DATA = False
 
 
 def _load_env_var_as_path(env_var: str) -> Path:
@@ -48,40 +49,43 @@ if USE_SAMPLE_DATA:
 
 else:
     chunk_size = 128
-    # Define subject ID and check that the corresponding folder exists
-    subject_id = "topro35"
-    assert (input_dir / subject_id).is_dir()
-
+    # Define subject ID which is part of the folder name
+    subject_id = "ToPro54"
     # Define channel (by wavelength) and check that there is exactly one folder
-    # containing the tiff files for this channel in the subject folder
+    # with this subject ID and channel combo.
     channel = "488"
-    channel_dirs = sorted(input_dir.glob(f"{subject_id}/*{channel}*"))
-    assert len(channel_dirs) == 1
+    channel_dirs = sorted(input_dir.glob(f"*{subject_id}_{channel}*"))
+    assert len(channel_dirs) == 1, (
+        f"Found {len(channel_dirs)} folders with subject ID {subject_id} and "
+        f"channel {channel}. Please ensure there is exactly one such folder."
+    )
     channel_dir = channel_dirs[0]
+    logger.debug(f"Will read tiffs from {channel_dir}")
 
 
 if __name__ == "__main__":
     if USE_SAMPLE_DATA:
         zarr_file_path = cat_data.zarr_file_path
-        da_arr = cat_data.generate_stack()
+        da_stack = cat_data.generate_stack()
     else:
         # Create a folders for the subject and channel in the output directory
         zarr_file_path = output_dir / subject_id / f"{subject_id}_{channel}.zarr"
 
         # Read the tiff stack into a dask array
-        # Passing only the first tiff is enough
-        # (because the rest of the stack is refererenced in metadata)
-        tiff_files = sorted(channel_dir.glob("*.tif"))
-        da_arr = dask_image.imread.imread(tiff_files[0]).T
+        # (passing first image is enough, because it contains metadata about the stack)
+        img_seq = ImageSequence(str(channel_dir / "*.ome.tif"))
+        img_0 = img_seq[0]
+        da_stack = da.from_array(img_0, chunks=(1, img_0.shape[1], img_0.shape[2])).T
         logger.info(
-            f"Read tiff stack into Dask array with shape {da_arr.shape}, "
-            f"dtype {da_arr.dtype}, and chunk sizes {da_arr.chunksize}"
+            f"Read tiff stack into Dask array with shape {da_stack.shape}, "
+            f"dtype {da_stack.dtype}, and chunk sizes {da_stack.chunksize}"
         )
 
     # Delete existing zarr file if it exists and we want to overwrite it
     if OVERWRITE_EXISTING_ZARR and zarr_file_path.exists():
         logger.info(f"Deleting existing {zarr_file_path}")
         shutil.rmtree(zarr_file_path)
+        logger.info(f"Deleted {zarr_file_path}")
 
     if OVERWRITE_EXISTING_ZARR or not zarr_file_path.exists():
         # Create a MultiScaleGroup object (zarr group)
@@ -92,14 +96,18 @@ if __name__ == "__main__":
             voxel_size=(0.98, 0.98, 3),
         )
         # Add full resolution data to zarr group 0
+        logger.info("Adding full resolution data to zarr group 0...")
         zarr_group.add_full_res_data(
-            da_arr,
-            n_processes=5,
+            da_stack,
+            n_processes=6,
             chunk_size=chunk_size,
             compressor="default",
         )
+        logger.info("Finished adding full resolution data.")
 
         # Add downsampled levels
         # Each level corresponds to downsampling by a factor of 2**i
         for i in [1, 2]:
-            zarr_group.add_downsample_level(i, n_processes=3)
+            logger.info(f"Adding downsample level {i}...")
+            zarr_group.add_downsample_level(i, n_processes=6)
+            logger.info(f"Finished adding downsample level {i}.")
