@@ -47,12 +47,12 @@ if USE_SAMPLE_DATA:
     chunk_size = 32
 
 else:
-    chunk_size = 64
+    chunk_size = 128
     # Define subject ID which is part of the folder name
     subject_id = "ToPro54"
     # Define channel (by wavelength) and check that there is exactly one folder
     # with this subject ID and channel combo.
-    channel = "488"
+    channel = "561"
     channel_dirs = sorted(input_dir.glob(f"*{subject_id}_{channel}*"))
     assert len(channel_dirs) == 1, (
         f"Found {len(channel_dirs)} folders with subject ID {subject_id} and "
@@ -72,17 +72,17 @@ if __name__ == "__main__":
 
         # Read the tiff stack into a dask array
         # (passing first image is enough, because it contains metadata about the stack)
-        da_stack = read_with_dask(channel_dir)
-        logger.info(
+        da_stack = read_with_dask(channel_dir).T
+        logger.debug(
             f"Read tiff stack into Dask array with shape {da_stack.shape}, "
             f"dtype {da_stack.dtype}, and chunk sizes {da_stack.chunksize}"
         )
 
     # Delete existing zarr file if it exists and we want to overwrite it
     if OVERWRITE_EXISTING_ZARR and zarr_file_path.exists():
-        logger.info(f"Deleting existing {zarr_file_path}")
+        logger.debug(f"Deleting existing {zarr_file_path}")
         shutil.rmtree(zarr_file_path)
-        logger.info(f"Deleted {zarr_file_path}")
+        logger.debug(f"Deleted {zarr_file_path}")
 
     if OVERWRITE_EXISTING_ZARR or not zarr_file_path.exists():
         # Create a MultiScaleGroup object (zarr group)
@@ -93,18 +93,18 @@ if __name__ == "__main__":
             voxel_size=(0.98, 0.98, 3),
         )
         # Add full resolution data to zarr group 0
-        logger.info("Adding full resolution data to zarr group 0...")
+        logger.debug("Adding full resolution data to zarr group 0...")
         zarr_group.add_full_res_data(
             da_stack,
-            n_processes=4,
+            n_processes=8,
             chunk_size=chunk_size,
             compressor="default",
         )
-        logger.info("Finished adding full resolution data.")
+        logger.debug("Finished adding full resolution data.")
 
         # Add downsampled levels
         # Each level corresponds to downsampling by a factor of 2**i
         for i in [1, 2]:
-            logger.info(f"Adding downsample level {i}...")
-            zarr_group.add_downsample_level(i, n_processes=4)
-            logger.info(f"Finished adding downsample level {i}.")
+            logger.debug(f"Adding downsample level {i}...")
+            zarr_group.add_downsample_level(i, n_processes=8)
+            logger.debug(f"Finished adding downsample level {i}.")
